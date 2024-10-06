@@ -143,9 +143,17 @@ class TVShowRenamer:
             self.preview_text = tk.Text(preview_frame, wrap=tk.NONE,
                                         font=('Consolas', 10), bd=1, relief=tk.SOLID)
             self.preview_text.grid(row=1, column=0, sticky="nsew")
-            preview_scrollbar = ttk.Scrollbar(preview_frame, orient="vertical", command=self.preview_text.yview)
-            preview_scrollbar.grid(row=1, column=1, sticky="ns")
-            self.preview_text.configure(yscrollcommand=preview_scrollbar.set)
+            
+            # Vertical scrollbar
+            preview_v_scrollbar = ttk.Scrollbar(preview_frame, orient="vertical", command=self.preview_text.yview)
+            preview_v_scrollbar.grid(row=1, column=1, sticky="ns")
+            
+            # Horizontal scrollbar (new)
+            preview_h_scrollbar = ttk.Scrollbar(preview_frame, orient="horizontal", command=self.preview_text.xview)
+            preview_h_scrollbar.grid(row=2, column=0, sticky="ew")
+            
+            # Configure the Text widget to use both scrollbars
+            self.preview_text.configure(yscrollcommand=preview_v_scrollbar.set, xscrollcommand=preview_h_scrollbar.set)
 
             self.dir_entry.bind('<KeyRelease>', self.update_preview)
             self.season_entry.bind('<KeyRelease>', self.update_preview)
