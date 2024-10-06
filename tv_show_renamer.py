@@ -44,6 +44,7 @@ class TVShowRenamer:
         self.end_episode = tk.StringVar(value="")
         self.file_extensions = tk.StringVar(value=".mp4,.mkv,.avi")
 
+        self.previous_directory = None  # Track the previous directory
         self.undo_stack = []
         self.selected_files = {}
         self.create_widgets()
@@ -129,9 +130,9 @@ class TVShowRenamer:
             button_frame = ttk.Frame(main_frame, style='TFrame')
             button_frame.grid(row=5, column=0, columnspan=3, pady=20)
             ttk.Button(button_frame, text="Preview", command=self.preview_rename).grid(row=0, column=0, padx=5)
-            ttk.Button(button_frame, text="Rename", command=self.rename_files).grid(row=0, column=1, padx=5)
-            ttk.Button(button_frame, text="Undo", command=self.undo_rename).grid(row=0, column=2, padx=5)
-            ttk.Button(button_frame, text="Auto-Detect", command=self.auto_detect_season_episode).grid(row=0, column=3, padx=5)
+            ttk.Button(button_frame, text="Auto-Detect", command=self.auto_detect_season_episode).grid(row=0, column=1, padx=5)
+            ttk.Button(button_frame, text="Rename", command=self.rename_files).grid(row=0, column=2, padx=5)
+            ttk.Button(button_frame, text="Undo", command=self.undo_rename).grid(row=0, column=3, padx=5)
             ttk.Button(button_frame, text="Reset", command=self.reset_fields).grid(row=0, column=4, padx=5)
 
             preview_frame = ttk.Frame(main_frame, style='TFrame')
@@ -141,7 +142,7 @@ class TVShowRenamer:
 
             ttk.Label(preview_frame, text="File Names Preview", font=('Segoe UI', 11, 'bold')).grid(row=0, column=0, pady=(0, 5))
 
-            self.select_all_var = tk.BooleanVar()
+            self.select_all_var = tk.BooleanVar(value=True)  # Default to True
             select_all_checkbox = tk.Checkbutton(preview_frame, text="Select All", variable=self.select_all_var, command=self.toggle_select_all)
             select_all_checkbox.grid(row=1, column=0, sticky="w", padx=5)
 
@@ -186,6 +187,7 @@ class TVShowRenamer:
                 if not os.path.isdir(directory):
                     raise NotADirectoryError(f"Selected path is not a directory: {directory}")
                 self.directory.set(directory)
+                self.get_files.cache_clear()  # Clear the cache to ensure fresh data
                 self.update_preview()
         except Exception as e:
             self.handle_error("Error selecting directory", e)
@@ -194,8 +196,8 @@ class TVShowRenamer:
     def get_files(self):
         try:
             directory = self.directory.get()
-            if not directory:
-                raise ValueError("No directory selected")
+            if not directory or not os.path.isdir(directory):
+                return []  # Return an empty list if the directory is invalid
             
             extensions = self.file_extensions.get().split(',')
             files = [file for file in os.listdir(directory) 
@@ -210,10 +212,15 @@ class TVShowRenamer:
             return
 
         try:
+            # Check if the directory has changed
+            if self.previous_directory != self.directory.get():
+                self.get_files.cache_clear()  # Clear the cache if the directory has changed
+                self.previous_directory = self.directory.get()  # Update the previous directory
+
             files = self.get_files()
             self.update_preview_text(files)
         except Exception as e:
-            self.handle_error("Error previewing rename", e)
+            self.handle_error("Error in preview rename", e)
 
     def update_preview_text(self, files):
         try:
@@ -232,7 +239,7 @@ class TVShowRenamer:
                 ext = os.path.splitext(file)[1]
                 new_name = f"S{season}E{episode:02d}{ext}"
 
-                var = self.selected_files.get(old_name, tk.BooleanVar(value=False))
+                var = self.selected_files.get(old_name, tk.BooleanVar(value=True))  # Default to True
                 self.selected_files[old_name] = var
 
                 # Determine if the file is selected for renaming
@@ -347,9 +354,16 @@ class TVShowRenamer:
             self.end_episode.set("")
             self.file_extensions.set(".mp4,.mkv,.avi")
             self.selected_files.clear()
+            self.select_all_var.set(True)  # Default to True
+            self.clear_preview()  # Clear the preview window
             self.update_preview()
         except Exception as e:
             self.handle_error("Error resetting fields", e)
+
+    def clear_preview(self):
+        """Clear the preview content frame."""
+        for widget in self.preview_content_frame.winfo_children():
+            widget.destroy()
 
     def validate_inputs(self):
         try:
@@ -377,6 +391,11 @@ class TVShowRenamer:
         if not self.validate_inputs():
             return
         try:
+            # Check if the directory has changed
+            if self.previous_directory != self.directory.get():
+                self.get_files.cache_clear()  # Clear the cache if the directory has changed
+                self.previous_directory = self.directory.get()  # Update the previous directory
+
             files = self.get_files()
             self.update_preview_text(files)
         except Exception as e:
@@ -396,3 +415,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = TVShowRenamer(root)
     root.mainloop()
+
