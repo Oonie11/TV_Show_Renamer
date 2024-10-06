@@ -2,6 +2,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import json
+import re
 
 class ModernStyle:
     # Light theme colors
@@ -141,7 +142,8 @@ class TVShowRenamer:
             ("Undo Last Rename", self.undo_rename),
             ("Save Settings", self.save_settings),
             ("Reset", self.reset_fields),
-            ("Toggle Theme", self.toggle_theme)
+            ("Toggle Theme", self.toggle_theme),
+            ("Auto-Detect", self.auto_detect_season_episode)  # New button
         ]):
             btn = ttk.Button(button_frame, text=text, command=command)
             btn.grid(row=i//3, column=i%3, padx=5, pady=5)
@@ -258,16 +260,16 @@ class TVShowRenamer:
                 print(f"Renamed: {file} -> {new_name}")
             except Exception as e:
                 print(f"Error renaming {file}: {str(e)}")
-
+            
             self.progress['value'] += 1
             self.master.update_idletasks()
 
         messagebox.showinfo("Rename Complete", f"Successfully renamed {total_files} files.")
-        self.preview_rename()  # Update the preview area
+        self.progress['value'] = 0
 
     def undo_rename(self):
         if not self.undo_stack:
-            messagebox.showinfo("Undo", "No rename operations to undo.")
+            messagebox.showinfo("Undo", "Nothing to undo.")
             return
 
         last_rename = self.undo_stack.pop()
@@ -275,18 +277,18 @@ class TVShowRenamer:
         self.progress['maximum'] = total_files
         self.progress['value'] = 0
 
-        for new_path, old_path in reversed(last_rename):
+        for new_path, old_path in last_rename:
             try:
                 os.rename(new_path, old_path)
                 print(f"Undone: {os.path.basename(new_path)} -> {os.path.basename(old_path)}")
             except Exception as e:
                 print(f"Error undoing rename of {os.path.basename(new_path)}: {str(e)}")
-
+            
             self.progress['value'] += 1
             self.master.update_idletasks()
 
         messagebox.showinfo("Undo Complete", f"Successfully undone {total_files} renames.")
-        self.preview_rename()  # Update the preview area
+        self.progress['value'] = 0
 
     def save_settings(self):
         settings = {
@@ -295,20 +297,24 @@ class TVShowRenamer:
             "start_episode": self.start_episode.get(),
             "end_episode": self.end_episode.get(),
             "file_extensions": self.file_extensions.get(),
+            "is_dark_theme": self.is_dark_theme
         }
-        with open("renamer_settings.json", "w") as f:
+        with open("settings.json", "w") as f:
             json.dump(settings, f)
         messagebox.showinfo("Settings Saved", "Your settings have been saved.")
 
     def load_settings(self):
         try:
-            with open("renamer_settings.json", "r") as f:
+            with open("settings.json", "r") as f:
                 settings = json.load(f)
             self.directory.set(settings.get("directory", ""))
             self.season_number.set(settings.get("season_number", "01"))
             self.start_episode.set(settings.get("start_episode", "01"))
             self.end_episode.set(settings.get("end_episode", ""))
             self.file_extensions.set(settings.get("file_extensions", ".mp4,.mkv,.avi"))
+            self.is_dark_theme = settings.get("is_dark_theme", False)
+            if self.is_dark_theme:
+                self.toggle_theme()
         except FileNotFoundError:
             pass  # No settings file found, use defaults
 
@@ -318,19 +324,62 @@ class TVShowRenamer:
         self.start_episode.set("01")
         self.end_episode.set("")
         self.file_extensions.set(".mp4,.mkv,.avi")
-        self.preview_area.delete(1.0, tk.END)
-        self.progress['value'] = 0
 
     def validate_inputs(self):
-        try:
-            int(self.season_number.get())
-            int(self.start_episode.get())
-            if self.end_episode.get():
-                int(self.end_episode.get())
-            return True
-        except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter valid numbers for season and episodes.")
+        if not self.directory.get():
+            messagebox.showerror("Error", "Please select a directory.")
             return False
+        if not self.season_number.get().isdigit():
+            messagebox.showerror("Error", "Season number must be a positive integer.")
+            return False
+        if not self.start_episode.get().isdigit():
+            messagebox.showerror("Error", "Start episode must be a positive integer.")
+            return False
+        if self.end_episode.get() and not self.end_episode.get().isdigit():
+            messagebox.showerror("Error", "End episode must be a positive integer.")
+            return False
+        return True
+
+    def auto_detect_season_episode(self):
+        directory = self.directory.get()
+        if not directory:
+            messagebox.showerror("Error", "Please select a directory first.")
+            return
+
+        files = self.get_files()
+        if not files:
+            messagebox.showerror("Error", "No matching files found in the selected directory.")
+            return
+
+        season_pattern = r'[Ss](\d{1,2})'
+        episode_pattern = r'[Ee](\d{1,3})'
+
+        seasons = []
+        episodes = []
+
+        for file in files:
+            season_match = re.search(season_pattern, file)
+            episode_match = re.search(episode_pattern, file)
+
+            if season_match:
+                seasons.append(int(season_match.group(1)))
+            if episode_match:
+                episodes.append(int(episode_match.group(1)))
+
+        if seasons:
+            most_common_season = max(set(seasons), key=seasons.count)
+            self.season_number.set(str(most_common_season).zfill(2))
+
+        if episodes:
+            min_episode = min(episodes)
+            max_episode = max(episodes)
+            self.start_episode.set(str(min_episode).zfill(2))
+            self.end_episode.set(str(max_episode).zfill(2))
+
+        if seasons or episodes:
+            messagebox.showinfo("Auto-Detect", "Season and episode numbers have been automatically detected.")
+        else:
+            messagebox.showwarning("Auto-Detect", "Could not detect season or episode numbers from the file names.")
 
 if __name__ == "__main__":
     root = tk.Tk()
