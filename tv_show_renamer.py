@@ -45,7 +45,7 @@ class TVShowRenamer:
         self.file_extensions = tk.StringVar(value=".mp4,.mkv,.avi")
 
         self.undo_stack = []
-        self.file_cache = None
+        self.selected_files = {}
         self.create_widgets()
 
     def configure_styles(self):
@@ -95,7 +95,7 @@ class TVShowRenamer:
 
             # Configure main_frame to be expandable
             main_frame.columnconfigure(1, weight=1)
-            main_frame.rowconfigure(6, weight=1)
+            main_frame.rowconfigure(7, weight=1)
 
             ttk.Label(main_frame, text="Directory:").grid(row=0, column=0, sticky="w", padx=5, pady=10)
             entry_frame = ttk.Frame(main_frame, style='TFrame')
@@ -140,20 +140,32 @@ class TVShowRenamer:
             preview_frame.rowconfigure(1, weight=1)
 
             ttk.Label(preview_frame, text="File Names Preview", font=('Segoe UI', 11, 'bold')).grid(row=0, column=0, pady=(0, 5))
-            self.preview_text = tk.Text(preview_frame, wrap=tk.NONE,
-                                        font=('Consolas', 10), bd=1, relief=tk.SOLID)
-            self.preview_text.grid(row=1, column=0, sticky="nsew")
-            
-            # Vertical scrollbar
-            preview_v_scrollbar = ttk.Scrollbar(preview_frame, orient="vertical", command=self.preview_text.yview)
-            preview_v_scrollbar.grid(row=1, column=1, sticky="ns")
-            
-            # Horizontal scrollbar (new)
-            preview_h_scrollbar = ttk.Scrollbar(preview_frame, orient="horizontal", command=self.preview_text.xview)
-            preview_h_scrollbar.grid(row=2, column=0, sticky="ew")
-            
-            # Configure the Text widget to use both scrollbars
-            self.preview_text.configure(yscrollcommand=preview_v_scrollbar.set, xscrollcommand=preview_h_scrollbar.set)
+
+            self.select_all_var = tk.BooleanVar()
+            select_all_checkbox = tk.Checkbutton(preview_frame, text="Select All", variable=self.select_all_var, command=self.toggle_select_all)
+            select_all_checkbox.grid(row=1, column=0, sticky="w", padx=5)
+
+            self.preview_frame_inner = ttk.Frame(preview_frame, style='TFrame')
+            self.preview_frame_inner.grid(row=2, column=0, sticky="nsew")
+            self.preview_frame_inner.columnconfigure(0, weight=1)
+
+            preview_v_scrollbar = ttk.Scrollbar(preview_frame, orient="vertical")
+            preview_v_scrollbar.grid(row=2, column=1, sticky="ns")
+
+            preview_h_scrollbar = ttk.Scrollbar(preview_frame, orient="horizontal")
+            preview_h_scrollbar.grid(row=3, column=0, sticky="ew")
+
+            self.preview_canvas = tk.Canvas(self.preview_frame_inner, yscrollcommand=preview_v_scrollbar.set, xscrollcommand=preview_h_scrollbar.set)
+            self.preview_canvas.grid(row=0, column=0, sticky="nsew")
+
+            self.preview_frame_inner.bind("<Configure>", lambda e: self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all")))
+            self.preview_canvas.bind("<Configure>", self.on_canvas_configure)
+
+            preview_v_scrollbar.config(command=self.preview_canvas.yview)
+            preview_h_scrollbar.config(command=self.preview_canvas.xview)
+
+            self.preview_content_frame = ttk.Frame(self.preview_canvas, style='TFrame')
+            self.preview_canvas.create_window((0, 0), window=self.preview_content_frame, anchor="nw", tags="preview_content")
 
             self.dir_entry.bind('<KeyRelease>', self.update_preview)
             self.season_entry.bind('<KeyRelease>', self.update_preview)
@@ -162,6 +174,10 @@ class TVShowRenamer:
             self.ext_entry.bind('<KeyRelease>', self.update_preview)
         except Exception as e:
             self.handle_error("Error creating widgets", e)
+
+    def on_canvas_configure(self, event):
+        self.preview_canvas.itemconfig("preview_content", width=event.width)
+        self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all"))
 
     def browse_directory(self):
         try:
@@ -201,7 +217,8 @@ class TVShowRenamer:
 
     def update_preview_text(self, files):
         try:
-            self.preview_text.delete(1.0, tk.END)
+            for widget in self.preview_content_frame.winfo_children():
+                widget.destroy()
 
             season = self.season_number.get().zfill(2)
             start_ep = int(self.start_episode.get())
@@ -215,16 +232,28 @@ class TVShowRenamer:
                 ext = os.path.splitext(file)[1]
                 new_name = f"S{season}E{episode:02d}{ext}"
 
-                self.preview_text.insert(tk.END, f"{old_name} -> {new_name}\n")
+                var = self.selected_files.get(old_name, tk.BooleanVar(value=False))
+                self.selected_files[old_name] = var
+
+                cb = tk.Checkbutton(self.preview_content_frame, text=f"{old_name} -> {new_name}", variable=var)
+                cb.grid(row=i, column=0, sticky="w", padx=5, pady=2)
+
+            self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all"))
+
         except Exception as e:
             self.handle_error("Error updating preview text", e)
+
+    def toggle_select_all(self):
+        select_all = self.select_all_var.get()
+        for file, var in self.selected_files.items():
+            var.set(select_all)
 
     def rename_files(self):
         if not self.validate_inputs():
             return
 
         try:
-            files = self.get_files()
+            files = [file for file, var in self.selected_files.items() if var.get()]
             directory = self.directory.get()
             season = self.season_number.get().zfill(2)
             start_ep = int(self.start_episode.get())
@@ -311,7 +340,8 @@ class TVShowRenamer:
             self.start_episode.set("01")
             self.end_episode.set("")
             self.file_extensions.set(".mp4,.mkv,.avi")
-            self.preview_text.delete(1.0, tk.END)
+            self.selected_files.clear()
+            self.update_preview()
         except Exception as e:
             self.handle_error("Error resetting fields", e)
 
