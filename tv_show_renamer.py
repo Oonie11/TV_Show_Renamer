@@ -337,20 +337,23 @@ class TVShowRenamer:
             return False
 
     @debounce(0.5)
-    def update_preview(self, event=None):
-        self.preview_rename()
+    def update_preview(self, *args):
+        if not self.validate_inputs():
+            return
+        try:
+            files = self.get_files()
+            self.update_preview_text(files)
+        except Exception as e:
+            self.handle_error("Error updating preview", e)
 
     def handle_error(self, message, exception):
-        error_message = f"{message}: {str(exception)}"
-        logging.error(error_message)
-        self.show_error(error_message)
+        logging.error(f"{message}: {exception}")
+        self.show_error(f"{message}: {exception}")
 
     def show_error(self, message):
-        logging.error(message)
         messagebox.showerror("Error", message)
 
     def show_info(self, title, message):
-        logging.info(f"{title}: {message}")
         messagebox.showinfo(title, message)
 
 if __name__ == "__main__":
