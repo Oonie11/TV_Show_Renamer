@@ -1,46 +1,42 @@
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
-import json
+import tkinter.ttk as ttk
+from tkinter import filedialog, messagebox
 import re
+from functools import lru_cache
+from threading import Timer
+import logging
 
-class ModernStyle:
-    # Light theme colors
-    LIGHT_PRIMARY_COLOR = "#3498db"
-    LIGHT_SECONDARY_COLOR = "#2980b9"
-    LIGHT_BACKGROUND_COLOR = "#f5f5f5"
-    LIGHT_SURFACE_COLOR = "#ffffff"
-    LIGHT_TEXT_COLOR = "#34495e"
-    LIGHT_ACCENT_COLOR = "#e74c3c"
-    LIGHT_BORDER_COLOR = "#bdc3c7"
+# Set up logging
+logging.basicConfig(filename='tv_show_renamer.log', level=logging.ERROR,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
-    # Dark theme colors
-    DARK_PRIMARY_COLOR = "#3498db"
-    DARK_SECONDARY_COLOR = "#2980b9"
-    DARK_BACKGROUND_COLOR = "#2c3e50"
-    DARK_SURFACE_COLOR = "#34495e"
-    DARK_TEXT_COLOR = "#ecf0f1"
-    DARK_ACCENT_COLOR = "#e74c3c"
-    DARK_BORDER_COLOR = "#7f8c8d"
-
-    # Current theme (start with light theme)
-    PRIMARY_COLOR = LIGHT_PRIMARY_COLOR
-    SECONDARY_COLOR = LIGHT_SECONDARY_COLOR
-    BACKGROUND_COLOR = LIGHT_BACKGROUND_COLOR
-    SURFACE_COLOR = LIGHT_SURFACE_COLOR
-    TEXT_COLOR = LIGHT_TEXT_COLOR
-    ACCENT_COLOR = LIGHT_ACCENT_COLOR
-    BORDER_COLOR = LIGHT_BORDER_COLOR
+def debounce(wait):
+    """ Decorator that will postpone a function's execution until after wait seconds
+        have elapsed since the last time it was invoked. """
+    def decorator(fn):
+        def debounced(*args, **kwargs):
+            def call_it():
+                fn(*args, **kwargs)
+            try:
+                debounced.t.cancel()
+            except(AttributeError):
+                pass
+            debounced.t = Timer(wait, call_it)
+            debounced.t.start()
+        return debounced
+    return decorator
 
 class TVShowRenamer:
     def __init__(self, master):
         self.master = master
         master.title("TV Show File Renamer")
-        master.geometry("750x800")
-        master.configure(bg=ModernStyle.BACKGROUND_COLOR)
-
-        self.style = ttk.Style()
-        self.style.theme_use('clam')
+        master.geometry("800x800")
+        
+        # Make the window resizable
+        master.resizable(True, True)
+        
+        self.configure_styles()
 
         self.directory = tk.StringVar()
         self.season_number = tk.StringVar(value="01")
@@ -49,353 +45,307 @@ class TVShowRenamer:
         self.file_extensions = tk.StringVar(value=".mp4,.mkv,.avi")
 
         self.undo_stack = []
-
-        self.is_dark_theme = False
-        self.configure_styles()
+        self.file_cache = None
         self.create_widgets()
-        self.load_settings()
 
     def configure_styles(self):
-        self.style.configure('TFrame', background=ModernStyle.BACKGROUND_COLOR)
-        self.style.configure('TLabel', 
-                             background=ModernStyle.BACKGROUND_COLOR, 
-                             foreground=ModernStyle.TEXT_COLOR, 
-                             font=('Segoe UI', 11))
-        
-        self.style.configure('TEntry', 
-                             fieldbackground=ModernStyle.SURFACE_COLOR, 
-                             foreground=ModernStyle.TEXT_COLOR, 
-                             font=('Segoe UI', 11),
-                             borderwidth=0)
-        self.style.map('TEntry', 
-                       fieldbackground=[('focus', ModernStyle.SURFACE_COLOR)],
-                       bordercolor=[('focus', ModernStyle.PRIMARY_COLOR)])
-        
-        self.style.configure('TButton', 
-                             background=ModernStyle.PRIMARY_COLOR, 
-                             foreground=ModernStyle.SURFACE_COLOR, 
-                             font=('Segoe UI', 11, 'bold'),
-                             borderwidth=0,
-                             padding=10)
-        self.style.map('TButton', 
-                       background=[('active', ModernStyle.SECONDARY_COLOR)],
-                       relief=[('pressed', 'flat'), ('!pressed', 'flat')])
-        
-        self.style.configure('TProgressbar', 
-                             background=ModernStyle.PRIMARY_COLOR, 
-                             troughcolor=ModernStyle.SURFACE_COLOR,
-                             borderwidth=0,
-                             thickness=10)
+        try:
+            self.style = ttk.Style()
+            self.style.theme_use('clam')
+            
+            colors = {
+                "PRIMARY_COLOR": "#2196F3",
+                "SECONDARY_COLOR": "#1976D2",
+                "BACKGROUND_COLOR": "#F5F5F5",
+                "SURFACE_COLOR": "#FFFFFF",
+                "TEXT_COLOR": "#212121",
+                "ACCENT_COLOR": "#FF4081",
+                "BORDER_COLOR": "#E0E0E0"
+            }
+            
+            self.style.configure('TFrame', background=colors["BACKGROUND_COLOR"])
+            self.style.configure('TLabel', 
+                                 background=colors["BACKGROUND_COLOR"], 
+                                 foreground=colors["TEXT_COLOR"], 
+                                 font=('Segoe UI', 11))
+            self.style.configure('TEntry', 
+                                 fieldbackground=colors["SURFACE_COLOR"], 
+                                 foreground=colors["TEXT_COLOR"], 
+                                 font=('Segoe UI', 11),
+                                 borderwidth=1)
+            self.style.map('TEntry', 
+                           fieldbackground=[('readonly', colors["SURFACE_COLOR"])])
+            self.style.configure('TButton', 
+                                 background=colors["PRIMARY_COLOR"], 
+                                 foreground=colors["SURFACE_COLOR"], 
+                                 font=('Segoe UI', 11, 'bold'),
+                                 borderwidth=0,
+                                 padding=(10, 5))
+            self.style.map('TButton', 
+                           background=[('active', colors["SECONDARY_COLOR"])])
+        except Exception as e:
+            self.handle_error("Error configuring styles", e)
 
     def create_widgets(self):
-        main_frame = ttk.Frame(self.master, padding="40 40 40 40", style='TFrame')
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.master.columnconfigure(0, weight=1)
-        self.master.rowconfigure(0, weight=1)
+        try:
+            main_frame = ttk.Frame(self.master, padding="50 50 50 50", style='TFrame')
+            main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+            self.master.columnconfigure(0, weight=1)
+            self.master.rowconfigure(0, weight=1)
 
-        # Directory selection
-        ttk.Label(main_frame, text="Directory:").grid(row=0, column=0, sticky="w", padx=5, pady=10)
-        entry_frame = ttk.Frame(main_frame, style='TFrame')
-        entry_frame.grid(row=0, column=1, padx=5, pady=10, sticky="we")
-        entry_frame.columnconfigure(0, weight=1)
-        self.dir_entry = tk.Entry(entry_frame, textvariable=self.directory, width=50, 
-                 font=('Segoe UI', 11), bd=0, relief=tk.FLAT,
-                 bg=ModernStyle.SURFACE_COLOR, fg=ModernStyle.TEXT_COLOR)
-        self.dir_entry.grid(row=0, column=0, sticky="we", ipady=5, ipadx=5)
-        ttk.Button(main_frame, text="Browse", command=self.browse_directory).grid(row=0, column=2, padx=(10,0), pady=10)
+            # Configure main_frame to be expandable
+            main_frame.columnconfigure(1, weight=1)
+            main_frame.rowconfigure(6, weight=1)
 
-        # Season number
-        ttk.Label(main_frame, text="Season Number:").grid(row=1, column=0, sticky="w", padx=5, pady=10)
-        self.season_entry = tk.Entry(main_frame, textvariable=self.season_number, width=10, 
-                 font=('Segoe UI', 11), bd=0, relief=tk.FLAT,
-                 bg=ModernStyle.SURFACE_COLOR, fg=ModernStyle.TEXT_COLOR)
-        self.season_entry.grid(row=1, column=1, sticky="w", padx=5, pady=10, ipady=5, ipadx=5)
+            ttk.Label(main_frame, text="Directory:").grid(row=0, column=0, sticky="w", padx=5, pady=10)
+            entry_frame = ttk.Frame(main_frame, style='TFrame')
+            entry_frame.grid(row=0, column=1, padx=5, pady=10, sticky="we")
+            entry_frame.columnconfigure(0, weight=1)
+            self.dir_entry = tk.Entry(entry_frame, textvariable=self.directory, 
+                     font=('Segoe UI', 11), bd=1, relief=tk.SOLID)
+            self.dir_entry.grid(row=0, column=0, sticky="we", ipady=5, ipadx=5)
+            ttk.Button(main_frame, text="Browse", command=self.browse_directory).grid(row=0, column=2, padx=(10,0), pady=10)
 
-        # Start episode
-        ttk.Label(main_frame, text="Start Episode:").grid(row=2, column=0, sticky="w", padx=5, pady=10)
-        self.start_ep_entry = tk.Entry(main_frame, textvariable=self.start_episode, width=10, 
-                 font=('Segoe UI', 11), bd=0, relief=tk.FLAT,
-                 bg=ModernStyle.SURFACE_COLOR, fg=ModernStyle.TEXT_COLOR)
-        self.start_ep_entry.grid(row=2, column=1, sticky="w", padx=5, pady=10, ipady=5, ipadx=5)
+            ttk.Label(main_frame, text="Season Number:").grid(row=1, column=0, sticky="w", padx=5, pady=10)
+            self.season_entry = tk.Entry(main_frame, textvariable=self.season_number, width=10, 
+                     font=('Segoe UI', 11), bd=1, relief=tk.SOLID)
+            self.season_entry.grid(row=1, column=1, sticky="w", padx=5, pady=10, ipady=5, ipadx=5)
 
-        # End episode
-        ttk.Label(main_frame, text="End Episode:").grid(row=3, column=0, sticky="w", padx=5, pady=10)
-        self.end_ep_entry = tk.Entry(main_frame, textvariable=self.end_episode, width=10, 
-                 font=('Segoe UI', 11), bd=0, relief=tk.FLAT,
-                 bg=ModernStyle.SURFACE_COLOR, fg=ModernStyle.TEXT_COLOR)
-        self.end_ep_entry.grid(row=3, column=1, sticky="w", padx=5, pady=10, ipady=5, ipadx=5)
+            ttk.Label(main_frame, text="Start Episode:").grid(row=2, column=0, sticky="w", padx=5, pady=10)
+            self.start_ep_entry = tk.Entry(main_frame, textvariable=self.start_episode, width=10, 
+                     font=('Segoe UI', 11), bd=1, relief=tk.SOLID)
+            self.start_ep_entry.grid(row=2, column=1, sticky="w", padx=5, pady=10, ipady=5, ipadx=5)
 
-        # File extensions
-        ttk.Label(main_frame, text="File Extensions:").grid(row=4, column=0, sticky="w", padx=5, pady=10)
-        self.ext_entry = tk.Entry(main_frame, textvariable=self.file_extensions, width=20, 
-                 font=('Segoe UI', 11), bd=0, relief=tk.FLAT,
-                 bg=ModernStyle.SURFACE_COLOR, fg=ModernStyle.TEXT_COLOR)
-        self.ext_entry.grid(row=4, column=1, sticky="w", padx=5, pady=10, ipady=5, ipadx=5)
+            ttk.Label(main_frame, text="End Episode:").grid(row=3, column=0, sticky="w", padx=5, pady=10)
+            self.end_ep_entry = tk.Entry(main_frame, textvariable=self.end_episode, width=10, 
+                     font=('Segoe UI', 11), bd=1, relief=tk.SOLID)
+            self.end_ep_entry.grid(row=3, column=1, sticky="w", padx=5, pady=10, ipady=5, ipadx=5)
 
-        # Buttons
-        button_frame = ttk.Frame(main_frame, style='TFrame')
-        button_frame.grid(row=5, column=0, columnspan=3, pady=20)
-        
-        for i, (text, command) in enumerate([
-            ("Preview Rename", self.preview_rename),
-            ("Rename Files", self.rename_files),
-            ("Undo Last Rename", self.undo_rename),
-            ("Save Settings", self.save_settings),
-            ("Reset", self.reset_fields),
-            ("Toggle Theme", self.toggle_theme),
-            ("Auto-Detect", self.auto_detect_season_episode)  # New button
-        ]):
-            btn = ttk.Button(button_frame, text=text, command=command)
-            btn.grid(row=i//3, column=i%3, padx=5, pady=5)
-            btn.bind("<Enter>", lambda e, btn=btn: btn.configure(cursor="hand2"))
-            btn.bind("<Leave>", lambda e, btn=btn: btn.configure(cursor=""))
+            ttk.Label(main_frame, text="File Extensions:").grid(row=4, column=0, sticky="w", padx=5, pady=10)
+            self.ext_entry = tk.Entry(main_frame, textvariable=self.file_extensions, width=30, 
+                     font=('Segoe UI', 11), bd=1, relief=tk.SOLID)
+            self.ext_entry.grid(row=4, column=1, sticky="w", padx=5, pady=10, ipady=5, ipadx=5)
 
-        # Preview area
-        preview_frame = ttk.Frame(main_frame, style='TFrame', padding="10")
-        preview_frame.grid(row=6, column=0, columnspan=3, padx=5, pady=10, sticky="nsew")
-        preview_frame.columnconfigure(0, weight=1)
-        preview_frame.rowconfigure(0, weight=1)
+            button_frame = ttk.Frame(main_frame, style='TFrame')
+            button_frame.grid(row=5, column=0, columnspan=3, pady=20)
+            ttk.Button(button_frame, text="Preview", command=self.preview_rename).grid(row=0, column=0, padx=5)
+            ttk.Button(button_frame, text="Rename", command=self.rename_files).grid(row=0, column=1, padx=5)
+            ttk.Button(button_frame, text="Undo", command=self.undo_rename).grid(row=0, column=2, padx=5)
+            ttk.Button(button_frame, text="Auto-Detect", command=self.auto_detect_season_episode).grid(row=0, column=3, padx=5)
+            ttk.Button(button_frame, text="Reset", command=self.reset_fields).grid(row=0, column=4, padx=5)
 
-        self.preview_area = tk.Text(preview_frame, height=15, width=70, 
-                                    bg=ModernStyle.SURFACE_COLOR, 
-                                    fg=ModernStyle.TEXT_COLOR, 
-                                    font=('Consolas', 10),
-                                    relief=tk.FLAT, padx=10, pady=10,
-                                    wrap=tk.NONE)
-        self.preview_area.grid(row=0, column=0, sticky="nsew")
+            preview_frame = ttk.Frame(main_frame, style='TFrame')
+            preview_frame.grid(row=6, column=0, columnspan=3, sticky="nsew", pady=20)
+            preview_frame.columnconfigure(0, weight=1)
+            preview_frame.rowconfigure(1, weight=1)
 
-        # Custom scrollbars for preview area
-        y_scrollbar = ttk.Scrollbar(preview_frame, orient="vertical", command=self.preview_area.yview)
-        y_scrollbar.grid(row=0, column=1, sticky="ns")
-        x_scrollbar = ttk.Scrollbar(preview_frame, orient="horizontal", command=self.preview_area.xview)
-        x_scrollbar.grid(row=1, column=0, sticky="ew")
-        self.preview_area.configure(yscrollcommand=y_scrollbar.set, xscrollcommand=x_scrollbar.set)
+            ttk.Label(preview_frame, text="File Names Preview", font=('Segoe UI', 11, 'bold')).grid(row=0, column=0, pady=(0, 5))
+            self.preview_text = tk.Text(preview_frame, wrap=tk.NONE,
+                                        font=('Consolas', 10), bd=1, relief=tk.SOLID)
+            self.preview_text.grid(row=1, column=0, sticky="nsew")
+            preview_scrollbar = ttk.Scrollbar(preview_frame, orient="vertical", command=self.preview_text.yview)
+            preview_scrollbar.grid(row=1, column=1, sticky="ns")
+            self.preview_text.configure(yscrollcommand=preview_scrollbar.set)
 
-        # Progress bar
-        self.progress = ttk.Progressbar(main_frame, length=400, mode='determinate', style='TProgressbar')
-        self.progress.grid(row=7, column=0, columnspan=3, padx=5, pady=10, sticky="ew")
-
-        # Configure grid weights
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(6, weight=1)
-
-    def toggle_theme(self):
-        self.is_dark_theme = not self.is_dark_theme
-        if self.is_dark_theme:
-            ModernStyle.PRIMARY_COLOR = ModernStyle.DARK_PRIMARY_COLOR
-            ModernStyle.SECONDARY_COLOR = ModernStyle.DARK_SECONDARY_COLOR
-            ModernStyle.BACKGROUND_COLOR = ModernStyle.DARK_BACKGROUND_COLOR
-            ModernStyle.SURFACE_COLOR = ModernStyle.DARK_SURFACE_COLOR
-            ModernStyle.TEXT_COLOR = ModernStyle.DARK_TEXT_COLOR
-            ModernStyle.ACCENT_COLOR = ModernStyle.DARK_ACCENT_COLOR
-            ModernStyle.BORDER_COLOR = ModernStyle.DARK_BORDER_COLOR
-        else:
-            ModernStyle.PRIMARY_COLOR = ModernStyle.LIGHT_PRIMARY_COLOR
-            ModernStyle.SECONDARY_COLOR = ModernStyle.LIGHT_SECONDARY_COLOR
-            ModernStyle.BACKGROUND_COLOR = ModernStyle.LIGHT_BACKGROUND_COLOR
-            ModernStyle.SURFACE_COLOR = ModernStyle.LIGHT_SURFACE_COLOR
-            ModernStyle.TEXT_COLOR = ModernStyle.LIGHT_TEXT_COLOR
-            ModernStyle.ACCENT_COLOR = ModernStyle.LIGHT_ACCENT_COLOR
-            ModernStyle.BORDER_COLOR = ModernStyle.LIGHT_BORDER_COLOR
-
-        self.configure_styles()
-        self.update_widget_colors()
-
-    def update_widget_colors(self):
-        self.master.configure(bg=ModernStyle.BACKGROUND_COLOR)
-        for widget in [self.dir_entry, self.season_entry, self.start_ep_entry, self.end_ep_entry, self.ext_entry]:
-            widget.configure(bg=ModernStyle.SURFACE_COLOR, fg=ModernStyle.TEXT_COLOR)
-        self.preview_area.configure(bg=ModernStyle.SURFACE_COLOR, fg=ModernStyle.TEXT_COLOR)
+            self.dir_entry.bind('<KeyRelease>', self.update_preview)
+            self.season_entry.bind('<KeyRelease>', self.update_preview)
+            self.start_ep_entry.bind('<KeyRelease>', self.update_preview)
+            self.end_ep_entry.bind('<KeyRelease>', self.update_preview)
+            self.ext_entry.bind('<KeyRelease>', self.update_preview)
+        except Exception as e:
+            self.handle_error("Error creating widgets", e)
 
     def browse_directory(self):
-        directory = filedialog.askdirectory()
-        if directory:
-            self.directory.set(directory)
+        try:
+            directory = filedialog.askdirectory()
+            if directory:
+                if not os.path.isdir(directory):
+                    raise NotADirectoryError(f"Selected path is not a directory: {directory}")
+                self.directory.set(directory)
+                self.update_preview()
+        except Exception as e:
+            self.handle_error("Error selecting directory", e)
 
+    @lru_cache(maxsize=1)
     def get_files(self):
-        directory = self.directory.get()
-        extensions = self.file_extensions.get().split(',')
-        return [file for file in sorted(os.listdir(directory)) if any(file.endswith(ext.strip()) for ext in extensions)]
+        try:
+            directory = self.directory.get()
+            if not directory:
+                raise ValueError("No directory selected")
+            
+            extensions = self.file_extensions.get().split(',')
+            files = [file for file in os.listdir(directory) 
+                     if any(file.lower().endswith(ext.strip().lower()) for ext in extensions)]
+            return sorted(files)
+        except Exception as e:
+            self.handle_error("Error getting files", e)
+            return []
 
     def preview_rename(self):
         if not self.validate_inputs():
             return
 
-        files = self.get_files()
-        season = self.season_number.get().zfill(2)
-        start = int(self.start_episode.get())
-        end = int(self.end_episode.get()) if self.end_episode.get() else start + len(files) - 1
+        try:
+            files = self.get_files()
+            self.update_preview_text(files)
+        except Exception as e:
+            self.handle_error("Error previewing rename", e)
 
-        self.preview_area.delete(1.0, tk.END)
-        for i, file in enumerate(files[:end-start+1], start=start):
-            _, ext = os.path.splitext(file)
-            new_name = f"S{season}E{str(i).zfill(2)}{ext}"
-            self.preview_area.insert(tk.END, f"{file} -> {new_name}\n")
+    def update_preview_text(self, files):
+        try:
+            self.preview_text.delete(1.0, tk.END)
+
+            season = self.season_number.get().zfill(2)
+            start_ep = int(self.start_episode.get())
+            end_ep = int(self.end_episode.get()) if self.end_episode.get() else None
+
+            for i, file in enumerate(files):
+                old_name = file
+                episode = start_ep + i
+                if end_ep and episode > end_ep:
+                    break
+                ext = os.path.splitext(file)[1]
+                new_name = f"S{season}E{episode:02d}{ext}"
+
+                self.preview_text.insert(tk.END, f"{old_name} -> {new_name}\n")
+        except Exception as e:
+            self.handle_error("Error updating preview text", e)
 
     def rename_files(self):
         if not self.validate_inputs():
             return
 
-        files = self.get_files()
-        season = self.season_number.get().zfill(2)
-        start = int(self.start_episode.get())
-        end = int(self.end_episode.get()) if self.end_episode.get() else start + len(files) - 1
+        try:
+            files = self.get_files()
+            directory = self.directory.get()
+            season = self.season_number.get().zfill(2)
+            start_ep = int(self.start_episode.get())
+            end_ep = int(self.end_episode.get()) if self.end_episode.get() else None
 
-        self.undo_stack.append([])  # New undo level
+            undo_actions = []
 
-        directory = self.directory.get()
-        total_files = min(len(files), end - start + 1)
-        self.progress['maximum'] = total_files
-        self.progress['value'] = 0
+            for i, file in enumerate(files):
+                episode = start_ep + i
+                if end_ep and episode > end_ep:
+                    break
+                old_path = os.path.join(directory, file)
+                ext = os.path.splitext(file)[1]
+                new_name = f"S{season}E{episode:02d}{ext}"
+                new_path = os.path.join(directory, new_name)
 
-        for i, file in enumerate(files[:end-start+1], start=start):
-            _, ext = os.path.splitext(file)
-            new_name = f"S{season}E{str(i).zfill(2)}{ext}"
-            old_path = os.path.join(directory, file)
-            new_path = os.path.join(directory, new_name)
-            
-            try:
-                os.rename(old_path, new_path)
-                self.undo_stack[-1].append((new_path, old_path))  # Store for undo
-                print(f"Renamed: {file} -> {new_name}")
-            except Exception as e:
-                print(f"Error renaming {file}: {str(e)}")
-            
-            self.progress['value'] += 1
-            self.master.update_idletasks()
+                try:
+                    os.rename(old_path, new_path)
+                    undo_actions.append((new_path, old_path))
+                except OSError as e:
+                    self.handle_error(f"Failed to rename {file}", e)
 
-        messagebox.showinfo("Rename Complete", f"Successfully renamed {total_files} files.")
-        self.progress['value'] = 0
+            self.undo_stack.append(undo_actions)
+            self.show_info("Rename", f"Renamed {len(undo_actions)} files successfully.")
+            self.update_preview()
+        except Exception as e:
+            self.handle_error("Error renaming files", e)
 
     def undo_rename(self):
         if not self.undo_stack:
-            messagebox.showinfo("Undo", "Nothing to undo.")
+            self.show_info("Undo", "Nothing to undo.")
             return
 
-        last_rename = self.undo_stack.pop()
-        total_files = len(last_rename)
-        self.progress['maximum'] = total_files
-        self.progress['value'] = 0
-
-        for new_path, old_path in last_rename:
-            try:
-                os.rename(new_path, old_path)
-                print(f"Undone: {os.path.basename(new_path)} -> {os.path.basename(old_path)}")
-            except Exception as e:
-                print(f"Error undoing rename of {os.path.basename(new_path)}: {str(e)}")
-            
-            self.progress['value'] += 1
-            self.master.update_idletasks()
-
-        messagebox.showinfo("Undo Complete", f"Successfully undone {total_files} renames.")
-        self.progress['value'] = 0
-
-    def save_settings(self):
-        settings = {
-            "directory": self.directory.get(),
-            "season_number": self.season_number.get(),
-            "start_episode": self.start_episode.get(),
-            "end_episode": self.end_episode.get(),
-            "file_extensions": self.file_extensions.get(),
-            "is_dark_theme": self.is_dark_theme
-        }
-        with open("settings.json", "w") as f:
-            json.dump(settings, f)
-        messagebox.showinfo("Settings Saved", "Your settings have been saved.")
-
-    def load_settings(self):
         try:
-            with open("settings.json", "r") as f:
-                settings = json.load(f)
-            self.directory.set(settings.get("directory", ""))
-            self.season_number.set(settings.get("season_number", "01"))
-            self.start_episode.set(settings.get("start_episode", "01"))
-            self.end_episode.set(settings.get("end_episode", ""))
-            self.file_extensions.set(settings.get("file_extensions", ".mp4,.mkv,.avi"))
-            self.is_dark_theme = settings.get("is_dark_theme", False)
-            if self.is_dark_theme:
-                self.toggle_theme()
-        except FileNotFoundError:
-            pass  # No settings file found, use defaults
+            undo_actions = self.undo_stack.pop()
 
-    def reset_fields(self):
-        self.directory.set("")
-        self.season_number.set("01")
-        self.start_episode.set("01")
-        self.end_episode.set("")
-        self.file_extensions.set(".mp4,.mkv,.avi")
+            for new_path, old_path in undo_actions:
+                try:
+                    os.rename(new_path, old_path)
+                except OSError as e:
+                    self.handle_error(f"Failed to undo rename for {new_path}", e)
 
-    def validate_inputs(self):
-        if not self.directory.get():
-            messagebox.showerror("Error", "Please select a directory.")
-            return False
-        if not self.season_number.get().isdigit():
-            messagebox.showerror("Error", "Season number must be a positive integer.")
-            return False
-        if not self.start_episode.get().isdigit():
-            messagebox.showerror("Error", "Start episode must be a positive integer.")
-            return False
-        if self.end_episode.get() and not self.end_episode.get().isdigit():
-            messagebox.showerror("Error", "End episode must be a positive integer.")
-            return False
-        return True
+            self.show_info("Undo", f"Undone {len(undo_actions)} renames successfully.")
+            self.update_preview()
+        except Exception as e:
+            self.handle_error("Error undoing rename", e)
 
     def auto_detect_season_episode(self):
-        directory = self.directory.get()
-        if not directory:
-            messagebox.showerror("Error", "Please select a directory first.")
-            return
+        try:
+            files = self.get_files()
+            if not files:
+                self.show_info("Auto-Detect", "No files found in the selected directory.")
+                return
 
-        files = self.get_files()
-        if not files:
-            messagebox.showerror("Error", "No matching files found in the selected directory.")
-            return
+            season_pattern = r'S(\d+)'
+            episode_pattern = r'E(\d+)'
 
-        season_pattern = r'[Ss](\d{1,2})'
-        episode_pattern = r'[Ee](\d{1,3})'
+            seasons = []
+            episodes = []
 
-        seasons = []
-        episodes = []
+            for file in files:
+                season_match = re.search(season_pattern, file, re.IGNORECASE)
+                episode_match = re.search(episode_pattern, file, re.IGNORECASE)
+                
+                if season_match:
+                    seasons.append(int(season_match.group(1)))
+                if episode_match:
+                    episodes.append(int(episode_match.group(1)))
 
-        for file in files:
-            season_match = re.search(season_pattern, file)
-            episode_match = re.search(episode_pattern, file)
+            if seasons:
+                self.season_number.set(f"{min(seasons):02d}")
+            if episodes:
+                self.start_episode.set(f"{min(episodes):02d}")
+                self.end_episode.set(f"{max(episodes):02d}")
 
-            if season_match:
-                seasons.append(int(season_match.group(1)))
-            if episode_match:
-                episodes.append(int(episode_match.group(1)))
+            self.update_preview()
+        except Exception as e:
+            self.handle_error("Error auto-detecting season and episode", e)
 
-        if seasons:
-            most_common_season = max(set(seasons), key=seasons.count)
-            self.season_number.set(str(most_common_season).zfill(2))
+    def reset_fields(self):
+        try:
+            self.directory.set("")
+            self.season_number.set("01")
+            self.start_episode.set("01")
+            self.end_episode.set("")
+            self.file_extensions.set(".mp4,.mkv,.avi")
+            self.preview_text.delete(1.0, tk.END)
+        except Exception as e:
+            self.handle_error("Error resetting fields", e)
 
-        if episodes:
-            min_episode = min(episodes)
-            max_episode = max(episodes)
-            self.start_episode.set(str(min_episode).zfill(2))
-            self.end_episode.set(str(max_episode).zfill(2))
+    def validate_inputs(self):
+        try:
+            if not self.directory.get():
+                raise ValueError("Please select a directory.")
+            if not self.season_number.get().isdigit():
+                raise ValueError("Season number must be a positive integer.")
+            if not self.start_episode.get().isdigit():
+                raise ValueError("Start episode must be a positive integer.")
+            if self.end_episode.get() and not self.end_episode.get().isdigit():
+                raise ValueError("End episode must be a positive integer.")
+            
+            # Validate file extensions
+            extensions = self.file_extensions.get().split(',')
+            if not all(ext.strip().startswith('.') for ext in extensions):
+                raise ValueError("All file extensions must start with a dot (.)")
+            
+            return True
+        except ValueError as e:
+            self.show_error(str(e))
+            return False
 
-        if seasons or episodes:
-            messagebox.showinfo("Auto-Detect", "Season and episode numbers have been automatically detected.")
-        else:
-            messagebox.showwarning("Auto-Detect", "Could not detect season or episode numbers from the file names.")
+    @debounce(0.5)
+    def update_preview(self, event=None):
+        self.preview_rename()
+
+    def handle_error(self, message, exception):
+        error_message = f"{message}: {str(exception)}"
+        logging.error(error_message)
+        self.show_error(error_message)
+
+    def show_error(self, message):
+        logging.error(message)
+        messagebox.showerror("Error", message)
+
+    def show_info(self, title, message):
+        logging.info(f"{title}: {message}")
+        messagebox.showinfo(title, message)
 
 if __name__ == "__main__":
     root = tk.Tk()
     app = TVShowRenamer(root)
-    
-    # Apply some final touches to the root window
-    root.option_add("*Font", "Segoe UI 11")
-    root.option_add("*Background", ModernStyle.BACKGROUND_COLOR)
-    root.option_add("*Foreground", ModernStyle.TEXT_COLOR)
-
-    # Center the window on the screen
-    root.update_idletasks()
-    width = root.winfo_width()
-    height = root.winfo_height()
-    x = (root.winfo_screenwidth() // 2) - (width // 2)
-    y = (root.winfo_screenheight() // 2) - (height // 2)
-    root.geometry('{}x{}+{}+{}'.format(width, height, x, y))
-
     root.mainloop()
