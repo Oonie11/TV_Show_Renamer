@@ -235,7 +235,13 @@ class TVShowRenamer:
                 var = self.selected_files.get(old_name, tk.BooleanVar(value=False))
                 self.selected_files[old_name] = var
 
-                cb = tk.Checkbutton(self.preview_content_frame, text=f"{old_name} -> {new_name}", variable=var)
+                # Determine if the file is selected for renaming
+                if var.get():
+                    display_name = f"{old_name} -> {new_name}"
+                else:
+                    display_name = old_name
+
+                cb = tk.Checkbutton(self.preview_content_frame, text=display_name, variable=var)
                 cb.grid(row=i, column=0, sticky="w", padx=5, pady=2)
 
             self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all"))
